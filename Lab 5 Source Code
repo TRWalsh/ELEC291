@@ -234,6 +234,7 @@ void main (void)
     printf( CLEAR_SCREEN );
     printf( FORE_BACK , COLOR_BLACK, COLOR_WHITE );
     
+    printf( "                           \n" ); //This leaves a space before the grey boxes
     printf( "ÉÍÍÍÍÍÍÍÍÍÍÍÍËÍÍÍÍÍÍÍÍÍÍÍÍ»\n" );
     printf( "º Vrms Ref   º            º\n" );
     printf( "ÌÍÍÍÍÍÍÍÍÍÍÍÍÎÍÍÍÍÍÍÍÍÍÍÍÍ¹\n" );
