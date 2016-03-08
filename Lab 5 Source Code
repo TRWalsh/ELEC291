@@ -41,6 +41,33 @@
 
 unsigned char overflow_count;
 
+void PORT_Init (void)
+{
+	P0MDOUT |= 0x10; // Enable UTX as push-pull output
+	XBR0     = 0x01; // Enable UART on P0.4(TX) and P0.5(RX)                     
+	XBR1     = 0x40; // Enable crossbar and weak pull-ups
+}
+
+void SYSCLK_Init (void)
+{
+	CLKSEL|=0b_0000_0011; // SYSCLK derived from Internal HF Osc / 1.
+	OSCICN |= 0x03;   // Configure internal oscillator for its maximum 
+	RSTSRC  = 0x04;   // Enable missing clock detector
+}
+ 
+void UART0_Init (void)
+{
+	SCON0 = 0x10;
+	TH1 = 0x10000-((SYSCLK/BAUDRATE)/2L);
+	CKCON &= ~0x0B; // T1M = 1; SCA1:0 = xx
+	CKCON |=  0x08;
+	TL1 = TH1;      // Init Timer1
+	TMOD &= ~0xf0;  // TMOD: timer 1 in 8-bit auto-reload
+	TMOD |=  0x20;                       
+	TR1 = 1; // START Timer1
+	TI = 1;  // Indicate TX0 ready
+}
+
 char _c51_external_startup (void)
 {
 	PCA0MD&=(~0x40) ;    // DISABLE WDT: clear Watchdog Enable bit
@@ -191,15 +218,11 @@ void main (void)
 	float RMSref=0;
 	float RMStest=0;
 	
+	float phase_shift=0; 
+	float PeriodREF=0; 
+	float PeriodTEST=0;
 	
-	float Period1=0; 
-	float Period2=0;
-	
-	float phasediff;
-	
-	flaot frequency;
-
-    PCA0MD &= ~0x40; // WDTE = 0 (clear watchdog timer enable)
+	 PCA0MD &= ~0x40; // WDTE = 0 (clear watchdog timer enable)
     PORT_Init();     // Initialize Port I/O
     SYSCLK_Init ();  // Initialize Oscillator
     UART0_Init();    // Initialize UART0
@@ -207,6 +230,7 @@ void main (void)
     printf( CLEAR_SCREEN );
     printf( FORE_BACK , COLOR_BLACK, COLOR_WHITE );
     
+    waitms(1000);  
     printf( "ÉÍÍÍÍÍÍÍÍÍÍÍÍËÍÍÍÍÍÍÍÍÍÍÍÍ»\n" );
     printf( "º Vrms Ref   º            º\n" );
     printf( "ÌÍÍÍÍÍÍÍÍÍÍÍÍÎÍÍÍÍÍÍÍÍÍÍÍÍ¹\n" );
@@ -216,7 +240,8 @@ void main (void)
     printf( "ÌÍÍÍÍÍÍÍÍÍÍÍÍÎÍÍÍÍÍÍÍÍÍÍÍÍ¹\n" );
     printf( "º Frequency  º            º\n" );
     printf( "ÈÍÍÍÍÍÍÍÍÍÍÍÍÊÍÍÍÍÍÍÍÍÍÍÍÍ¼\n" );
-    
+	
+
 	// Configure the pins we want to use as analog inputs
 	InitPinADC(2, 3); // Configure P2.0 as analog input
 	InitPinADC(2, 2); // Configure P2.1 as analog input
@@ -228,8 +253,7 @@ void main (void)
 	
 	while(1)
 	{	
-		printf("\n entering while loop. \n");
-		
+		//CHANGED STUFF
 		// Measure half period and period at pin P1.0 using timer 0
 		//PERIOD 1
 		while(P2_0!=0); // Wait for the signal to be zero
@@ -252,11 +276,7 @@ void main (void)
 			}
 		}
 		TR0=0; // Stop timer 0, the 24-bit number [overflow_count-TH0-TL0] has the period!
-		Period1=(overflow_count*65536.0+TH0*256.0+TL0)*(12.0/SYSCLK); //added x1000000 to convert to actual seconds?? Vhy
-		
-		printf("Period 1=%f \n", Period1);
-		printf("\n measured period 1 \n \n");
-		waitms(2000);
+		PeriodREF=(overflow_count*65536.0+TH0*256.0+TL0)*(12.0/SYSCLK); //added x1000000 to convert to actual seconds?? Vhy
 		
 		// Measure half period and period at pin P1.1 using timer 0
 		//PERIOD 2
@@ -269,9 +289,34 @@ void main (void)
 		while (P2_1==1); // Wait for the signal to be zero
 		TR0=0; // Stop timer 0
 		// [TH0,TL0] is half the period in multiples of 12/CLK, so:
-		Period2=(TH0*0x100+TL0)*2.0; // Assume Period is unsigned int 
+		PeriodTEST=(TH0*0x100+TL0)*2.0; // Assume Period is unsigned int 
 		//%u for unsigned int decimal??
-		printf("Period 2=%f \n,", Period2);
+		//printf("Period TEST=%f \n,", PeriodTEST);
+		
+		//calculate phase shift
+		TR0=0; // Stop timer 0
+		//TMOD=0B_0000_0001; // Set timer 0 as 16-bit timer bit timer
+		TH0=0; TL0=0; // Reset the timer
+		while (P2_0==1); // Wait for the (REF) signal to be zero
+		while (P2_0==0); // Wait for the (REF) signal to be one
+		TR0=1; // Start timing
+		if(P2_1==0){	//test not yet high: positive phase shift
+			while(P2_1==0);		//wait for TEST to go high
+			TR0=0; // Stop timer 0
+			// [TH0,TL0] is half the period in multiples of 12/CLK, so:
+			phase_shift=(TH0*0x100+TL0); // Assume Period is unsigned int 
+			phase_shift=phase_shift*(360.0/PeriodTEST);
+		}
+		else{			//test already high:negative phase shift
+			while(P2_1==1); 	//wait for REF to go low
+			TR0=0; // Stop timer 0
+			// [TH0,TL0] is half the period in multiples of 12/CLK, so:
+			phase_shift=(TH0*0x100+TL0); // Assume Period is unsigned int 
+			phase_shift=phase_shift-PeriodREF; //acount for negative shift
+			phase_shift=phase_shift*(360.0/PeriodTEST);
+		}
+		//printf("Phase Shift(from REF): %f \n", phase_shift);
+		
 		
 		V[0]=Volts_at_Pin(LQFP32_MUX_P2_3);
 		RMSref=V[0]/sqrtf(2.0);
@@ -279,11 +324,11 @@ void main (void)
 		RMStest=(V[01]/sqrtf(2));
 		////V[2]=Volts_at_Pin(LQFP32_MUX_P2_2);
 		////V[3]=Volts_at_Pin(LQFP32_MUX_P2_3);
-		printf("V0=%5.3f, V1=%5.3f \n", V[0], V[1]);
-		printf("RMSref(V0)=%5.3f, RMStest(V1)=%5.3f \n \n \n \n", &RMSref, &RMStest); 
-		waitms(2000);
+		//printf("V0=%5.3f, V1=%5.3f \n", V[0], V[1]);
+		//printf("RMSref(V0)=%5.3f, RMStest(V1)=%5.3f \n \n \n \n", &RMSref, &RMStest); 
+		waitms(2000);  
 		
-	    printf( GOTO_YX , 2, 18);
+		printf( GOTO_YX , 2, 18);
 	    printf( FORE_BACK , COLOR_RED, COLOR_WHITE );
 	    printf("%6.3f", RMSref);
 	    printf( GOTO_YX , 4, 18);
@@ -291,10 +336,10 @@ void main (void)
 	    printf("%6.3f", RMStest);
 	    printf( GOTO_YX , 6, 18);
 	    printf( FORE_BACK , COLOR_BLUE, COLOR_WHITE );
-	    printf("%7.3f", phasediff);
+	    printf("%7.3f", phase_shift);
 	    printf( GOTO_YX , 8, 18);
 	    printf( FORE_BACK , COLOR_MAGENTA, COLOR_WHITE );
-	    printf("%7.3f", frequency);
+	    printf("%7.3f", PeriodREF);
 	}
 }//1.1 and 1.0 for square wave
   //2.2 and 2.3 for voltage 
